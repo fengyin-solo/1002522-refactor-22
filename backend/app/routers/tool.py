@@ -6,14 +6,22 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.tool import ToolService
+from app.services.tool import (
+    CHECKOUT_ACTION,
+    INSPECTION_ACTION,
+    REQUIRED_FIELDS,
+    SCRAP_ACTION,
+    STATUS_ORDER,
+    TOOL_FIELDS,
+    ToolService,
+)
 
 router = APIRouter(prefix="/api/tool", tags=["检修工具"])
 
 service = ToolService()
 
-LIST_FIELDS = ["工具编号", "工具名称", "规格型号", "检定日期", "下次检定日", "存放位置", "领用人", "工具状态"]
-STATUSES = ["合格可用", "待检定", "已过期", "已报废"]
+LIST_FIELDS = TOOL_FIELDS
+STATUSES = STATUS_ORDER
 
 
 @router.get("", response_model=PageResult[dict])
@@ -30,6 +38,13 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出检修工具清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "tool", "total": total, "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条检修工具明细；不存在时给出可读的错误说明。"""
@@ -41,25 +56,47 @@ def get_entry(entry_id: int) -> dict:
 
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
-    """登记一条检修工具，缺字段时说明原因而不是静默丢弃。"""
-    entry, missing = service.create_entry(payload.values)
-    if missing:
-        return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
+    """登记一条检修工具，缺字段或编号重复时说明原因而不是静默丢弃。"""
+    entry, errors = service.create_entry(payload.values)
+    if errors:
+        message = "；".join(errors)
+        if errors[0] in REQUIRED_FIELDS:
+            message = f"缺少必填字段：{message}"
+        return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message="检修工具已登记", entry=entry)
+
+
+@router.post("/{entry_id}/checkout", response_model=ActionResult)
+def checkout_entry(entry_id: int, payload: EntryPayload) -> ActionResult:
+    """办理领用：状态、日期与返回字段走检修工具共用拼装。"""
+    entry, message = service.checkout(entry_id, payload.values)
+    return _action_result(entry, message, CHECKOUT_ACTION)
+
+
+@router.post("/{entry_id}/inspection", response_model=ActionResult)
+def inspect_entry(entry_id: int, payload: EntryPayload) -> ActionResult:
+    """送检测试：状态、日期与返回字段走检修工具共用拼装。"""
+    entry, message = service.send_for_inspection(entry_id, payload.values)
+    return _action_result(entry, message, INSPECTION_ACTION)
+
+
+@router.post("/{entry_id}/scrap", response_model=ActionResult)
+def scrap_entry(entry_id: int, payload: EntryPayload) -> ActionResult:
+    """申请报废：状态、日期与返回字段走检修工具共用拼装。"""
+    entry, message = service.scrap(entry_id, payload.values)
+    return _action_result(entry, message, SCRAP_ACTION)
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条检修工具执行办理领用、送检测试、申请报废；不允许的动作会被拦下并说明原因。"""
+    """兼容原统一动作入口，实际仍调用同一份检修工具状态实现。"""
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    values = {key: value for key, value in payload.values.items() if key != "action"}
+    entry, message = service.run_action(entry_id, action, values)
+    return _action_result(entry, message, action)
+
+
+def _action_result(entry: dict[str, Any] | None, message: str, action: str) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
-    return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出检修工具清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "tool", "total": total, "items": items}
+    return ActionResult(ok=True, message=f"检修工具已{action}" if action else message, entry=entry)

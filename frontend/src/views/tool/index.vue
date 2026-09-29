@@ -72,6 +72,11 @@ type Row = Record<string, string | number | null>
 const ENDPOINT = '/api/tool'
 const columns = ["工具编号", "工具名称", "规格型号", "检定日期", "下次检定日", "存放位置", "领用人", "工具状态"]
 const actions = ["办理领用", "送检测试", "申请报废"]
+const actionPaths: Record<string, string> = {
+  办理领用: 'checkout',
+  送检测试: 'inspection',
+  申请报废: 'scrap',
+}
 const statuses = ["合格可用", "待检定", "已过期", "已报废"]
 const stats = [{"label": "合格工具", "value": 0}, {"label": "待检定工具", "value": 0}, {"label": "已过期工具", "value": 0}]
 
@@ -97,12 +102,13 @@ function openCreate() {
 async function runAction(action: string, row: Row) {
   errorMessage.value = ''
   try {
-    const response = await request(`${ENDPOINT}/${row.id}/actions`, {
+    const response = await request(`${ENDPOINT}/${row.id}/${actionPaths[action]}`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({}),
     })
-    if (!response.ok) {
-      throw new Error('检修工具动作未生效，请稍后重试')
+    const payload = await response.json()
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.message || '检修工具动作未生效，请稍后重试')
     }
     await reload()
   } catch (error) {
