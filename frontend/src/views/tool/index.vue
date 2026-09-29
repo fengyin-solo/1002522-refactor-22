@@ -36,7 +36,7 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">{{ formatCell(row[column]) }}</td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -63,23 +63,48 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, unknown>
 
 const ENDPOINT = '/api/tool'
-const columns = ["工具编号", "工具名称", "规格型号", "检定日期", "下次检定日", "存放位置", "领用人", "工具状态"]
+const columns = [
+  "工具编号",
+  "工具名称",
+  "规格型号",
+  "检定日期",
+  "下次检定日",
+  "存放位置",
+  "领用人",
+  "报废日期",
+  "工具状态",
+]
 const actions = ["办理领用", "送检测试", "申请报废"]
-const statuses = ["合格可用", "待检定", "已过期", "已报废"]
-const stats = [{"label": "合格工具", "value": 0}, {"label": "待检定工具", "value": 0}, {"label": "已过期工具", "value": 0}]
+const statDefinitions = [
+  { label: "合格工具", status: "合格可用" },
+  { label: "待检定工具", status: "待检定" },
+  { label: "已过期工具", status: "已过期" },
+  { label: "已报废工具", status: "已报废" },
+]
 
 const rows = ref<Row[]>([])
 const total = ref(0)
+const stats = computed(() => statDefinitions.map((item) => ({
+  label: item.label,
+  value: rows.value.filter((row) => row['工具状态'] === item.status).length,
+})))
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+function formatCell(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.length ? value.length + ' 条' : '—'
+  }
+  return value === null || value === undefined || value === '' ? '—' : String(value)
+}
 
 function resetFilters() {
   filters.value = {}
@@ -99,10 +124,11 @@ async function runAction(action: string, row: Row) {
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
-    if (!response.ok) {
-      throw new Error('检修工具动作未生效，请稍后重试')
+    const result = await response.json()
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.message || '检修工具动作未生效，请稍后重试')
     }
     await reload()
   } catch (error) {
